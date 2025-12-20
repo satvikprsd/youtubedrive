@@ -1,7 +1,3 @@
-Here’s a clean, minimal **README.md** that matches your project’s vibe and explains it clearly without overdoing it.
-
----
-
 # YouTube Drive
 
 Unlimited* file storage powered by YouTube.
