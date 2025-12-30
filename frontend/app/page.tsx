@@ -168,8 +168,7 @@ export default function Home() {
                 </div>
                 <a
                   href={process.env.NEXT_PUBLIC_BACKEND_URL + downloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  download
                   className="flex items-center justify-center gap-2 w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
                 >
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
