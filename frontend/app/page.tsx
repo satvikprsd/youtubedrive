@@ -74,7 +74,8 @@ export default function Home() {
       const response = await fetch(url, {method: "POST",body: formData});
 
       if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`);
+        const errorData = await response.json();
+        throw new Error(`Upload failed: ${errorData.detail || response.statusText}`);
       }
       const data = await response.json();
       setDownloadUrl(data.download_url);

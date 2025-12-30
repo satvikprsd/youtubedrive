@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MAX_FILE_SIZE = 5*1024*1024 #5 MB
+MAX_TOTAL_STORAGE = 400*1024*1024 #400 MB
 FILE_EXPIRY_SECONDS = 5*60 #5 min
 
 WIDTH = 480
@@ -49,15 +50,23 @@ COLORS = np.array([
 
 async def cleanup_old_files():
     while True:
-        now = time.time()
-        for path in OUTPUT_DIR.iterdir():
-            if path.is_file() and now - path.stat().st_mtime > FILE_EXPIRY_SECONDS:
+        try:
+            now = time.time()
+            files = list(OUTPUT_DIR.iterdir())
+            
+            for path in files:
                 try:
-                    path.unlink()
-                except Exception:
-                    pass
-        await asyncio.sleep(60)
-
+                    if path.is_file():
+                        file_age = now - path.stat().st_mtime
+                        if file_age > FILE_EXPIRY_SECONDS:
+                            print(f"Deleting {path.name}")
+                            path.unlink()
+                except Exception as e:
+                    print(f"Error deleting {path.name}: {e}")
+                    
+        except Exception as e:
+            print(f"Error in cleanup scanning: {e}")
+        await asyncio.sleep(FILE_EXPIRY_SECONDS)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -103,11 +112,13 @@ async def encode_file(file: UploadFile = File(...)):
             raise HTTPException(status_code=413,detail="File too large")
 
         file_id = str(uuid.uuid4())[:8]
+        file_name = os.path.splitext(file.filename)[0][:20]
         ext = os.path.splitext(file.filename)[1]
 
         file_hex = binascii.hexlify(data).decode()
+        file_name_hex = binascii.hexlify(file_name.encode()).decode()
         ext_hex = binascii.hexlify(ext.encode()).decode()
-        hexdata = file_hex + DELIMITER_HEX + ext_hex
+        hexdata = file_hex + DELIMITER_HEX + file_name_hex + DELIMITER_HEX + ext_hex
 
         symbols = np.array([int(c, 16) for c in hexdata], dtype=np.uint8)
 
@@ -116,7 +127,7 @@ async def encode_file(file: UploadFile = File(...)):
         symbols_per_frame = blocks_x*blocks_y
         frames = (len(symbols) + symbols_per_frame - 1)//symbols_per_frame
 
-        out_path = OUTPUT_DIR / f"encoded_{file_id}.avi"
+        out_path = OUTPUT_DIR / f"encoded_{file_name}_{file_id}.avi"
         writer = cv2.VideoWriter(str(out_path),cv2.VideoWriter_fourcc(*"MJPG"),30,(WIDTH, HEIGHT))
 
         for i in range(frames):
@@ -142,6 +153,11 @@ async def decode_video(file: UploadFile = File(...)):
         temp_path = OUTPUT_DIR / f"temp_{file_id}.avi"
 
         content = await file.read()
+        total_space_used = sum(f.stat().st_size for f in OUTPUT_DIR.iterdir() if f.is_file())
+        print(f"Total space used: {total_space_used/1024/1024} MB")
+        if total_space_used + len(content) > MAX_TOTAL_STORAGE:
+            raise HTTPException(status_code=507, detail="Server out of space. Please try again later.")
+
         temp_path.write_bytes(content)
 
         cap = cv2.VideoCapture(str(temp_path))
@@ -177,11 +193,12 @@ async def decode_video(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="No data decoded")
 
         hexstring = "".join(decoded).rstrip("f")
-        parts = hexstring.rsplit(DELIMITER_HEX, 1)
+        parts = hexstring.rsplit(DELIMITER_HEX, 2)
 
-        if len(parts) == 2:
-            data_hex, ext_hex = parts
+        if len(parts) == 3:
+            data_hex, file_name_hex, ext_hex = parts
             try:
+                file_name = binascii.unhexlify(file_name_hex).decode()
                 ext = binascii.unhexlify(ext_hex).decode()
                 if not ext.startswith("."):
                     ext = "." + ext
@@ -189,13 +206,14 @@ async def decode_video(file: UploadFile = File(...)):
                 ext = ".bin"
                 data_hex = hexstring
         else:
+            file_name = "unknown"
             ext = ".bin"
             data_hex = hexstring
 
         if len(data_hex)%2 != 0:
             data_hex = "0" + data_hex
 
-        out_path = OUTPUT_DIR / f"decoded_{file_id}{ext}"
+        out_path = OUTPUT_DIR / f"{file_name}_{file_id}{ext}"
         out_path.write_bytes(binascii.unhexlify(data_hex))
 
         return JSONResponse({"success": True,"filename": out_path.name, "download_url": f"/files/{out_path.name}"})
