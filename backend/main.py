@@ -11,6 +11,7 @@ import uuid
 import asyncio
 import time
 import os
+import shutil
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -150,19 +151,26 @@ async def encode_file(file: UploadFile = File(...)):
 async def decode_video(file: UploadFile = File(...)):
     try:
         file_id = str(uuid.uuid4())[:8]
-        temp_path = OUTPUT_DIR / f"temp_{file_id}.avi"
+        temp_video_path = OUTPUT_DIR / f"temp_{file_id}.avi"
+        temp_hex_path = OUTPUT_DIR / f"temp_hex_{file_id}.bin"
 
-        content = await file.read()
+        file.file.seek(0, 2)
+        file_size = file.file.tell()
+        file.file.seek(0)
+
+
         total_space_used = sum(f.stat().st_size for f in OUTPUT_DIR.iterdir() if f.is_file())
         print(f"Total space used: {total_space_used/1024/1024} MB")
-        if total_space_used + len(content) > MAX_TOTAL_STORAGE:
+        if total_space_used + file_size > MAX_TOTAL_STORAGE:
+            temp_video_path.unlink(missing_ok=True)
             raise HTTPException(status_code=507, detail="Server out of space. Please try again later.")
 
-        temp_path.write_bytes(content)
+        with temp_video_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-        cap = cv2.VideoCapture(str(temp_path))
+        cap = cv2.VideoCapture(str(temp_video_path))
         if not cap.isOpened():
-            temp_path.unlink(missing_ok=True)
+            temp_video_path.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail="Invalid video")
 
         palette = COLORS.astype(np.int32)
@@ -173,48 +181,73 @@ async def decode_video(file: UploadFile = File(...)):
         cols = WIDTH//BOX_SIZE
         per_frame = rows*cols
 
-        decoded = []
+        #decoded = []
+        with temp_hex_path.open("w") as hex_file:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
 
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-
-            avg = frame.reshape(rows, BOX_SIZE, cols, BOX_SIZE, 3).swapaxes(1, 2).mean(axis=(2, 3)).astype(np.int32)
-            flat = avg.reshape(per_frame, 3)[:, np.newaxis, :]
-            diff = flat - palette_b
-            dist = np.sum(diff** 2, axis=2)
-            decoded.extend(hex_map[np.argmin(dist, axis=1)])
+                avg = frame.reshape(rows, BOX_SIZE, cols, BOX_SIZE, 3).swapaxes(1, 2).mean(axis=(2, 3)).astype(np.int32)
+                flat = avg.reshape(per_frame, 3)[:, np.newaxis, :]
+                diff = flat - palette_b
+                dist = np.sum(diff** 2, axis=2)
+                hex_file.write("".join(hex_map[np.argmin(dist, axis=1)]))
 
         cap.release()
-        temp_path.unlink(missing_ok=True)
+        temp_video_path.unlink(missing_ok=True)
 
-        if not decoded:
+        file_size = temp_hex_path.stat().st_size
+        if file_size == 0:
             raise HTTPException(status_code=400, detail="No data decoded")
+        
+        read_size = min(4096, file_size)
 
-        hexstring = "".join(decoded).rstrip("f")
-        parts = hexstring.rsplit(DELIMITER_HEX, 2)
+        with temp_hex_path.open("r") as hex_file:
+            hex_file.seek(file_size - read_size)
+            tail = hex_file.read()
 
+        tail = tail.rstrip("f")
+
+        if len(tail)%2 != 0:
+            tail = tail[1:]
+
+        # print(f"Tail data: {tail}")
+        parts = tail.rsplit(DELIMITER_HEX, 2)
+        data_end_offset = file_size
+        # print(f"Parts: {parts}")
         if len(parts) == 3:
-            data_hex, file_name_hex, ext_hex = parts
+            _, file_name_hex, ext_hex = parts
             try:
                 file_name = binascii.unhexlify(file_name_hex).decode()
                 ext = binascii.unhexlify(ext_hex).decode()
                 if not ext.startswith("."):
                     ext = "." + ext
+                data_end_offset = file_size - len(file_name_hex) - len(ext_hex) - 2*len(DELIMITER_HEX)
             except Exception:
                 ext = ".bin"
-                data_hex = hexstring
         else:
             file_name = "unknown"
             ext = ".bin"
-            data_hex = hexstring
 
-        if len(data_hex)%2 != 0:
-            data_hex = "0" + data_hex
 
         out_path = OUTPUT_DIR / f"{file_name}_{file_id}{ext}"
-        out_path.write_bytes(binascii.unhexlify(data_hex))
+        with temp_hex_path.open("r") as hex_file, out_path.open("wb") as out_file:
+            cur_pos = 0
+            CHUNK_SIZE = 1024*1024
+
+            while cur_pos < data_end_offset:
+                read_size = min(CHUNK_SIZE, data_end_offset - cur_pos)
+                hex_chunk = hex_file.read(read_size)
+                if not hex_chunk:
+                    break
+                try:
+                    out_file.write(binascii.unhexlify(hex_chunk))
+                except Exception as e:
+                    pass
+
+                cur_pos += len(hex_chunk)
+        temp_hex_path.unlink(missing_ok=True)
 
         return JSONResponse({"success": True,"filename": out_path.name, "download_url": f"/files/{out_path.name}"})
 
