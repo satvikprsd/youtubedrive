@@ -18,7 +18,7 @@ load_dotenv()
 
 MAX_FILE_SIZE = 5*1024*1024 #5 MB
 MAX_TOTAL_STORAGE = 400*1024*1024 #400 MB
-FILE_EXPIRY_SECONDS = 5*60 #5 min
+FILE_EXPIRY_SECONDS = 3*60 #3 min
 
 WIDTH = 480
 HEIGHT = 480
@@ -147,6 +147,8 @@ async def encode_file(file: UploadFile = File(...)):
 
         return JSONResponse({"success": True,"filename": out_path.name, "download_url": f"/files/{out_path.name}"})
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
