@@ -112,6 +112,10 @@ async def encode_file(file: UploadFile = File(...)):
         if len(data) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413,detail="File too large")
 
+        total_space_used = sum(f.stat().st_size for f in OUTPUT_DIR.iterdir() if f.is_file())
+        if total_space_used + len(data)*21 > MAX_TOTAL_STORAGE: # encoded ratio
+            raise HTTPException(status_code=507, detail="Server out of space. Please try again later.")
+
         file_id = str(uuid.uuid4())[:8]
         file_name = os.path.splitext(file.filename)[0][:20]
         ext = os.path.splitext(file.filename)[1]
