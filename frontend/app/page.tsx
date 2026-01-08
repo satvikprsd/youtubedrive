@@ -74,6 +74,9 @@ export default function Home() {
       const response = await fetch(url, {method: "POST",body: formData});
 
       if (!response.ok) {
+        if (response.status === 502) {
+          throw new Error("Server was sleeping. Please try again.");
+        }
         const errorData = await response.json();
         throw new Error(`Upload failed: ${errorData.detail || response.statusText}`);
       }
@@ -81,12 +84,19 @@ export default function Home() {
       setDownloadUrl(data.download_url);
       setStatus("success");
     } catch (err) {
+
       setError(err instanceof Error ? err.message : "Something went wrong");
       setStatus("error");
     }
   };
 
   const isLoading = status === "loading";
+
+  // Wake up
+  useEffect(() => {
+    fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}`).catch(() => {
+    });
+  }, []);
 
   return (
     <div className="min-h-screen bg-linear-to-br from-gray-50 via-gray-100 to-gray-200 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 flex items-center justify-center p-6 transition-colors duration-500">
